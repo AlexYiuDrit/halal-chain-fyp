@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Minimal Halal Chain Interface</title>
+    <style>
+        /* Basic styling for readability */
+        body { font-family: sans-serif; line-height: 1.6; margin: 20px; }
+        .container { max-width: 700px; margin: 20px auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;}
+        h1, h2 { text-align: center; color: #333; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input[type="text"] { width: calc(100% - 12px); padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 3px;}
+        button { padding: 10px 20px; margin-top: 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 3px; }
+        button:hover { background-color: #0056b3; }
+        #result, #addResult { margin-top: 15px; padding: 10px; border: 1px dashed #eee; background-color: #fff; min-height: 40px; word-wrap: break-word;}
+        hr { margin: 30px 0; border: 0; border-top: 1px solid #eee; }
+        .form-section, .get-section { margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Halal Certification (Minimal Demo)</h1>
+
+        <div class="form-section">
+            <h2>Add/Update Certificate</h2>
+            <form id="addForm">
+                <label for="addCertId">Certificate ID:</label>
+                <input type="text" id="addCertId" required>
+
+                <label for="addProductId">Product ID:</label>
+                <input type="text" id="addProductId" required>
+
+                <label for="addManuId">Manufacturer ID:</label>
+                <input type="text" id="addManuId" required>
+
+                <label for="addIssueDate">Issue Date (e.g., YYYY-MM-DD):</label>
+                <input type="text" id="addIssueDate" required>
+
+                <label for="addExpiryDate">Expiry Date (e.g., YYYY-MM-DD):</label>
+                <input type="text" id="addExpiryDate" required>
+
+                <label for="addCertBodyId">Certifying Body ID:</label>
+                <input type="text" id="addCertBodyId" required>
+
+                <button type="submit">Add/Update Certificate on Blockchain</button>
+            </form>
+            <div id="addResult"></div>
+        </div>
+
+        <hr>
+
+        <div class="get-section">
+            <h2>Get Certificate Details</h2>
+            <label for="getCertId">Enter Certificate ID to retrieve:</label>
+            <input type="text" id="getCertId">
+            <button onclick="getCertificate()">Get Certificate from Blockchain</button>
+            <div id="result">Enter an ID and click Get.</div>
+        </div>
+    </div>
+
+    <script>
+        // --- Add Certificate Form Handling ---
+        const addForm = document.getElementById('addForm');
+        const addResultDiv = document.getElementById('addResult');
+
+        addForm.addEventListener('submit', async (e) => {
+            e.preventDefault(); // Prevent default form submission (page reload)
+            addResultDiv.textContent = 'Processing... Sending transaction to blockchain via backend...';
+            addResultDiv.style.color = 'orange';
+
+            // Collect data from form fields
+            const certificateData = {
+                certificateId: document.getElementById('addCertId').value,
+                productId: document.getElementById('addProductId').value,
+                manufacturerId: document.getElementById('addManuId').value,
+                issueDate: document.getElementById('addIssueDate').value,
+                expiryDate: document.getElementById('addExpiryDate').value,
+                certifyingBodyId: document.getElementById('addCertBodyId').value,
+            };
+
+            try {
+                // Send data to our backend server's /addCertificate endpoint
+                const response = await fetch('/addCertificate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(certificateData) // Convert JS object to JSON string
+                });
+
+                const result = await response.json(); // Parse JSON response from server
+
+                if (result.success) {
+                    addResultDiv.textContent = `Success! Certificate added/updated. Transaction Hash: ${result.txHash}`;
+                    addResultDiv.style.color = 'green';
+                    addForm.reset(); // Clear the form fields
+                } else {
+                    // Display error message from backend
+                    addResultDiv.textContent = `Error: ${result.message}`;
+                    addResultDiv.style.color = 'red';
+                }
+            } catch (error) {
+                // Handle network errors or other frontend issues
+                console.error('Frontend Error (Add Certificate):', error);
+                addResultDiv.textContent = `Frontend Error: ${error.message}. Check console & ensure backend server is running.`;
+                addResultDiv.style.color = 'red';
+            }
+        });
+
+        // --- Get Certificate Handling ---
+        const getCertIdInput = document.getElementById('getCertId');
+        const resultDiv = document.getElementById('result');
+
+        async function getCertificate() {
+            const certId = getCertIdInput.value;
+            if (!certId) {
+                resultDiv.textContent = 'Please enter a Certificate ID.';
+                resultDiv.style.color = 'red';
+                return;
+            }
+            resultDiv.textContent = `Workspaceing details for certificate ${certId} from blockchain via backend...`;
+            resultDiv.style.color = 'orange';
+
+            try {
+                // Send request to our backend server's /getCertificate/:certificateId endpoint
+                // Note: Certificate ID is part of the URL path
+                const response = await fetch(`/getCertificate/${certId}`);
+                const result = await response.json(); // Parse JSON response
+
+                if (result.success) {
+                    const data = result.data;
+                    // Display formatted data retrieved from the blockchain
+                    resultDiv.innerHTML = `
+                        <strong>Certificate Found:</strong><br>
+                        ------------------------------------<br>
+                        Certificate ID: ${data.certificateId}<br>
+                        Product ID: ${data.productId}<br>
+                        Manufacturer ID: ${data.manufacturerId}<br>
+                        Issue Date: ${data.issueDate}<br>
+                        Expiry Date: ${data.expiryDate}<br>
+                        Certifying Body: ${data.certifyingBodyId}<br>
+                        Is Valid: ${data.isValid}<br>
+                        ------------------------------------
+                    `;
+                     resultDiv.style.color = 'black';
+                } else {
+                    // Display error message from backend (e.g., "Certificate not found")
+                    resultDiv.textContent = `Info: ${result.message}`;
+                     resultDiv.style.color = 'blue'; // Use blue for info messages like "not found"
+                }
+            } catch (error) {
+                // Handle network errors or other frontend issues
+                console.error('Frontend Error (Get Certificate):', error);
+                resultDiv.textContent = `Frontend Error: ${error.message}. Check console & ensure backend server is running.`;
+                resultDiv.style.color = 'red';
+            }
+        }
+    </script>
+</body>
+</html>

@@ -55,6 +55,17 @@
             <button onclick="getCertificate()">Get Certificate from Blockchain</button>
             <div id="result">Enter an ID and click Get.</div>
         </div>
+
+        <hr style="margin: 30px 0; border: 0; border-top: 1px solid #eee;">
+
+        <div class="invalidate-section">
+            <h2>Invalidate Certificate</h2>
+            <label for="invalidateCertId">Enter Certificate ID to invalidate:</label>
+            <input type="text" id="invalidateCertId">
+            <button onclick="invalidateCertificate()">Invalidate Certificate on Blockchain</button>
+            <div id="invalidateResult"></div>
+        </div>
+
     </div>
 
     <script>
@@ -126,24 +137,25 @@
 
                 if (result.success) {
                     const data = result.data;
+                    let validityStatus = data.isValid ? '<strong style="color:green;">VALID</strong>' : '<strong style="color:red;">INVALID</strong>';
                     // Display formatted data retrieved from the blockchain
                     resultDiv.innerHTML = `
-                        <strong>Certificate Found:</strong><br>
+                        <strong>Certificate Details:</strong><br>
                         ------------------------------------<br>
                         Certificate ID: ${data.certificateId}<br>
-                        Product ID: ${data.productId}<br>
-                        Manufacturer ID: ${data.manufacturerId}<br>
-                        Issue Date: ${data.issueDate}<br>
-                        Expiry Date: ${data.expiryDate}<br>
-                        Certifying Body: ${data.certifyingBodyId}<br>
-                        Is Valid: ${data.isValid}<br>
+                        Status: ${validityStatus}<br> Product ID: ${data.productId || '(Data in DB)'}<br> Manufacturer ID: ${data.manufacturerId || '(Data in DB)'}<br>
+                        Issue Date: ${data.issueDate || '(Data in DB)'}<br>
+                        Expiry Date: ${data.expiryDate || '(Data in DB)'}<br>
+                        Certifying Body: ${data.certifyingBodyId || '(Data in DB)'}<br>
+                        Off-Chain Hash: ${data.offchainDataHash}<br>
+                        DB Record ID: ${data._id || '(N/A)'}<br> Last Updated (DB): ${data.lastUpdated || '(N/A)'}<br>
                         ------------------------------------
                     `;
-                     resultDiv.style.color = 'black';
+                    resultDiv.style.color = 'black';
                 } else {
                     // Display error message from backend (e.g., "Certificate not found")
                     resultDiv.textContent = `Info: ${result.message}`;
-                     resultDiv.style.color = 'blue'; // Use blue for info messages like "not found"
+                    resultDiv.style.color = 'blue'; // Use blue for info messages like "not found"
                 }
             } catch (error) {
                 // Handle network errors or other frontend issues
@@ -152,6 +164,50 @@
                 resultDiv.style.color = 'red';
             }
         }
+
+        // --- START: New Invalidate Certificate Handling ---
+        const invalidateCertIdInput = document.getElementById('invalidateCertId');
+        const invalidateResultDiv = document.getElementById('invalidateResult');
+
+        async function invalidateCertificate() {
+            const certId = invalidateCertIdInput.value;
+            if (!certId) {
+                invalidateResultDiv.textContent = 'Please enter a Certificate ID to invalidate.';
+                invalidateResultDiv.style.color = 'red';
+                return;
+            }
+            invalidateResultDiv.textContent = `Processing request to invalidate certificate ${certId}...`;
+            invalidateResultDiv.style.color = 'orange';
+
+            try {
+                // Send request to our backend server's /invalidateCertificate/:certificateId endpoint
+                // Note: Uses POST method, Certificate ID is part of the URL path
+                const response = await fetch(`/invalidateCertificate/${certId}`, {
+                    method: 'POST', // Use POST, PUT, or DELETE as appropriate for action type
+                    headers: { 'Content-Type': 'application/json' }
+                    // No body needed as ID is in URL
+                });
+
+                const result = await response.json(); // Parse JSON response from server
+
+                if (result.success) {
+                    invalidateResultDiv.textContent = `Success! ${result.message} TxHash: ${result.txHash}`;
+                    invalidateResultDiv.style.color = 'green';
+                    invalidateCertIdInput.value = ''; // Clear input
+                } else {
+                    // Display error message from backend (e.g., "Not found", "Already invalid")
+                    invalidateResultDiv.textContent = `Error: ${result.message}`;
+                    invalidateResultDiv.style.color = 'red';
+                }
+            } catch (error) {
+                // Handle network errors or other frontend issues
+                console.error('Frontend Error (Invalidate Certificate):', error);
+                invalidateResultDiv.textContent = `Frontend Error: ${error.message}. Check console & ensure backend server is running.`;
+                invalidateResultDiv.style.color = 'red';
+            }
+        }
+        // --- END: New Invalidate Certificate Handling ---
+
     </script>
 </body>
 </html>

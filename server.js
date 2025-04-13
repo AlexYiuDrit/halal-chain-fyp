@@ -60,7 +60,7 @@ try {
     const deployedNetwork = contractJson.networks[networkId];
 
     if (!deployedNetwork || !deployedNetwork.address) {
-         throw new Error("Contract address not found in build artifact. Ensure contract is deployed.");
+        throw new Error("Contract address not found in build artifact. Ensure contract is deployed.");
     }
     contractAddress = deployedNetwork.address; // Assign the dynamically found address
 
@@ -228,6 +228,111 @@ app.get('/getCertificate/:certificateId', async (req, res) => {
     } catch (error) {
         console.error("!!! Error in /getCertificate endpoint:", error);
         res.status(500).send({ success: false, message: error.message });
+    }
+});
+
+// --- START: New Invalidate Endpoint ---
+app.post('/invalidateCertificate/:certificateId', async (req, res) => {
+    // Check if DB and contract connections are ready
+    if (!certificatesCollection || !halalContract) {
+         return res.status(503).send({ success: false, message: 'Server components not ready.' });
+    }
+    try {
+        const { certificateId } = req.params; // Get ID from URL path
+        console.log(`Attempting to invalidate certificate ID: ${certificateId}`);
+
+        // Validate certificateId
+        if (!certificateId) {
+            return res.status(400).send({ success: false, message: 'Certificate ID is required.' });
+        }
+
+        // Get owner account from Ganache to send the transaction
+        const accounts = await web3.eth.getAccounts();
+        if (accounts.length === 0) {
+             return res.status(500).send({ success: false, message: 'No accounts found in Ganache.' });
+        }
+        // Use the owner account (the one that deployed the contract)
+        // Ensure this account is available and unlocked in Ganache
+        const ownerAccount = accounts[0];
+        console.log(`Using owner account ${ownerAccount} to send invalidate transaction.`);
+
+        // Estimate gas for the invalidate transaction
+        const gasEstimateBigInt = await halalContract.methods.invalidateCertificate(
+            certificateId
+        ).estimateGas({ from: ownerAccount });
+
+        const gasEstimateNumber = Number(gasEstimateBigInt);
+        const bufferedGasLimit = Math.floor(gasEstimateNumber * 1.2); // Add 20% buffer
+        console.log(`Estimated gas for invalidation: ${bufferedGasLimit}`);
+
+        // Send the transaction to the smart contract's invalidate function
+        const receipt = await halalContract.methods.invalidateCertificate(
+            certificateId
+        ).send({ from: ownerAccount, gas: bufferedGasLimit });
+
+        console.log('Invalidation transaction successful! Receipt:', receipt.transactionHash);
+        // Optionally: Update status in MongoDB as well for consistency, though the primary source is now blockchain
+        await certificatesCollection.updateOne({ _id: certificateId }, { $set: { manuallyMarkedInvalid: true, lastUpdated: new Date().toISOString() } });
+
+        res.status(200).send({ success: true, message: `Certificate ${certificateId} marked as invalid.`, txHash: receipt.transactionHash });
+
+    } catch (error) {
+        // Log the full error structure for easier debugging in the future
+        console.error("!!! Error object structure in /invalidateCertificate endpoint:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    
+        let friendlyMessage = "An unexpected error occurred during invalidation."; // Default
+        let statusCode = 500; // Default
+    
+        // --- START: More Robust Revert Reason Parsing ---
+        let revertReason = null;
+    
+        // Try common locations for the revert reason string:
+        if (error.reason) { // Standard EIP-838 reason field (might not be populated by older tools/chains)
+             revertReason = error.reason;
+        } else if (error.cause && typeof error.cause.message === 'string') { // Nested cause message (matches user log structure)
+             const causeMessage = error.cause.message;
+             // Extract reason string after "revert " prefix
+             const match = causeMessage.match(/revert\s*(.*)/);
+             if (match && match[1]) {
+                  revertReason = match[1].trim();
+             } else {
+                  revertReason = causeMessage; // Fallback to using the whole cause message if "revert " not found
+             }
+        } else if (typeof error.message === 'string') { // Fallback to checking the main message string
+             const message = error.message;
+             const match = message.match(/revert\s*(.*)/);
+             if (match && match[1]) {
+                  // Get the first line after "revert " as it might contain stack traces
+                  revertReason = match[1].trim().split('\n')[0];
+             }
+        }
+        // Add checks for other potential properties if needed (e.g., error.data?.message)
+    
+        console.log("Detected Revert Reason:", revertReason); // Log the detected reason
+    
+        // Set friendly message and status code based on detected reason
+        if (revertReason) {
+            if (revertReason.includes("Certificate does not exist.")) {
+                friendlyMessage = "Certificate ID not found on the blockchain.";
+                statusCode = 404; // Not Found
+            } else if (revertReason.includes("Certificate is already invalid.")) {
+                friendlyMessage = "Certificate is already marked as invalid.";
+                statusCode = 400; // Bad Request
+            } else if (revertReason.includes("caller is not the owner")) { // From Ownable
+                friendlyMessage = "Action requires contract owner privileges.";
+                statusCode = 403; // Forbidden
+            } else {
+                // Found a revert reason, but didn't match known ones
+                friendlyMessage = `Smart contract execution reverted: ${revertReason}`;
+                statusCode = 400; // Use 400 for general contract rule violations
+            }
+        } else if (error && error.code === 310) { // Generic contract error if no specific reason found
+            friendlyMessage = "Smart contract execution failed without a specific reason.";
+            statusCode = 500;
+        }
+        // --- END: More Robust Revert Reason Parsing ---
+    
+        res.status(statusCode).send({ success: false, message: friendlyMessage });
     }
 });
 

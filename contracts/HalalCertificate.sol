@@ -25,6 +25,11 @@ contract HalalCertificate is Ownable { // Inherit from Ownable
         address indexed updatedBy // Address that triggered the update
     );
 
+    event CertificateInvalidated(
+        string indexed certificateId,
+        address indexed invalidatedBy // Address that triggered the invalidation
+    );
+
     // Constructor to set the initial owner (the deploying account)
     // Use constructor(address initialOwner) for Ownable v5+, or just constructor() for v4
     // Check your OpenZeppelin version. Assuming v4 for simplicity here.
@@ -59,6 +64,21 @@ contract HalalCertificate is Ownable { // Inherit from Ownable
             _isValid,
             msg.sender // Log the address that performed the action
         );
+    }
+
+    // Function to mark a certificate as invalid
+    function invalidateCertificate(string memory _certificateId) public onlyOwner {
+        // Input Validation: Check if certificate exists (using hash as proxy)
+        require(certificates[_certificateId].offchainDataHash != bytes32(0), "Certificate does not exist.");
+
+        // Input Validation: Check if it's already invalid
+        require(certificates[_certificateId].isValid == true, "Certificate is already invalid.");
+
+        // Update the state: Set isValid to false
+        certificates[_certificateId].isValid = false;
+
+        // Emit the event
+        emit CertificateInvalidated(_certificateId, msg.sender);
     }
 
     // We still rely on the public getter for 'certificates' to retrieve data.

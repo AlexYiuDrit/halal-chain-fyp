@@ -1,24 +1,95 @@
 <!DOCTYPE html>
 <html>
+
 <head>
-    <title>Minimal Halal Chain Interface</title>
+    <title>Halal Chain Interface</title>
     <style>
-        /* Basic styling for readability */
-        body { font-family: sans-serif; line-height: 1.6; margin: 20px; }
-        .container { max-width: 700px; margin: 20px auto; padding: 20px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9;}
-        h1, h2 { text-align: center; color: #333; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"] { width: calc(100% - 12px); padding: 8px; margin-bottom: 15px; border: 1px solid #ccc; border-radius: 3px;}
-        button { padding: 10px 20px; margin-top: 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 3px; }
-        button:hover { background-color: #0056b3; }
-        #result, #addResult { margin-top: 15px; padding: 10px; border: 1px dashed #eee; background-color: #fff; min-height: 40px; word-wrap: break-word;}
-        hr { margin: 30px 0; border: 0; border-top: 1px solid #eee; }
-        .form-section, .get-section { margin-bottom: 20px; }
+        body {
+            font-family: sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 20px auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+
+        h1,
+        h2 {
+            text-align: center;
+            color: #333;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input[type="text"] {
+            width: calc(100% - 12px);
+            padding: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin-top: 10px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 3px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #result,
+        #addResult {
+            margin-top: 15px;
+            padding: 10px;
+            border: 1px dashed #eee;
+            background-color: #fff;
+            min-height: 40px;
+            word-wrap: break-word;
+        }
+
+        hr {
+            margin: 30px 0;
+            border: 0;
+            border-top: 1px solid #eee;
+        }
+
+        .form-section,
+        .get-section {
+            margin-bottom: 20px;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
-        <h1>Halal Certification (Minimal Demo)</h1>
+        <h1>Halal Certification</h1>
+
+        <div class="rbac-sim-section"
+            style="background-color: #eee; padding: 10px; margin-bottom: 20px; border-radius: 5px;">
+            <h3>RBAC Demonstration</h3>
+            <p>Simulate actions as:</p>
+            <button onclick="switchRole('CERTIFIER')">Act as Certifier (Account 0)</button>
+            <button onclick="switchRole('NON_CERTIFIER')">Act as Non-Certifier (Account 1)</button>
+            <p style="margin-top: 5px;">Current Simulated Role: <strong id="currentRoleDisplay">Loading...</strong></p>
+            <div id="roleSwitchResult" style="font-size: 0.9em; margin-top: 5px;"></div>
+        </div>
+        <hr>
 
         <div class="form-section">
             <h2>Add/Update Certificate</h2>
@@ -69,16 +140,60 @@
     </div>
 
     <script>
-        // --- Add Certificate Form Handling ---
+
+        // --- Role-Based Access Control (RBAC) ---
+        const currentRoleDisplay = document.getElementById('currentRoleDisplay');
+        const roleSwitchResultDiv = document.getElementById('roleSwitchResult');
+
+        async function switchRole(roleToSimulate) {
+            roleSwitchResultDiv.textContent = 'Switching role...';
+            roleSwitchResultDiv.style.color = 'orange';
+            try {
+                const response = await fetch('/simulateRole', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role: roleToSimulate })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    roleSwitchResultDiv.textContent = `Success: ${result.message}`;
+                    roleSwitchResultDiv.style.color = 'green';
+                    getCurrentRole();
+                } else {
+                    roleSwitchResultDiv.textContent = `Error: ${result.message}`;
+                    roleSwitchResultDiv.style.color = 'red';
+                }
+            } catch (error) {
+                roleSwitchResultDiv.textContent = `Frontend Error: ${error.message}`;
+                roleSwitchResultDiv.style.color = 'red';
+            }
+        }
+
+        async function getCurrentRole() {
+            try {
+                const response = await fetch('/getCurrentRole');
+                const result = await response.json();
+                if (result.success) {
+                    currentRoleDisplay.textContent = result.role;
+                } else {
+                    currentRoleDisplay.textContent = 'Error loading role';
+                }
+            } catch (error) {
+                currentRoleDisplay.textContent = 'Error loading role';
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', getCurrentRole);
+
+        // --- Add Certificate ---
         const addForm = document.getElementById('addForm');
         const addResultDiv = document.getElementById('addResult');
 
         addForm.addEventListener('submit', async (e) => {
-            e.preventDefault(); // Prevent default form submission (page reload)
+            e.preventDefault();
             addResultDiv.textContent = 'Processing... Sending transaction to blockchain via backend...';
             addResultDiv.style.color = 'orange';
 
-            // Collect data from form fields
             const certificateData = {
                 certificateId: document.getElementById('addCertId').value,
                 productId: document.getElementById('addProductId').value,
@@ -89,33 +204,30 @@
             };
 
             try {
-                // Send data to our backend server's /addCertificate endpoint
                 const response = await fetch('/addCertificate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(certificateData) // Convert JS object to JSON string
+                    body: JSON.stringify(certificateData)
                 });
 
-                const result = await response.json(); // Parse JSON response from server
+                const result = await response.json();
 
                 if (result.success) {
                     addResultDiv.textContent = `Success! Certificate added/updated. Transaction Hash: ${result.txHash}`;
                     addResultDiv.style.color = 'green';
-                    addForm.reset(); // Clear the form fields
+                    addForm.reset();
                 } else {
-                    // Display error message from backend
                     addResultDiv.textContent = `Error: ${result.message}`;
                     addResultDiv.style.color = 'red';
                 }
             } catch (error) {
-                // Handle network errors or other frontend issues
                 console.error('Frontend Error (Add Certificate):', error);
                 addResultDiv.textContent = `Frontend Error: ${error.message}. Check console & ensure backend server is running.`;
                 addResultDiv.style.color = 'red';
             }
         });
 
-        // --- Get Certificate Handling ---
+        // --- Get Certificate ---
         const getCertIdInput = document.getElementById('getCertId');
         const resultDiv = document.getElementById('result');
 
@@ -130,42 +242,40 @@
             resultDiv.style.color = 'orange';
 
             try {
-                // Send request to our backend server's /getCertificate/:certificateId endpoint
-                // Note: Certificate ID is part of the URL path
                 const response = await fetch(`/getCertificate/${certId}`);
-                const result = await response.json(); // Parse JSON response
+                const result = await response.json();
 
                 if (result.success) {
                     const data = result.data;
                     let validityStatus = data.isValid ? '<strong style="color:green;">VALID</strong>' : '<strong style="color:red;">INVALID</strong>';
-                    // Display formatted data retrieved from the blockchain
                     resultDiv.innerHTML = `
                         <strong>Certificate Details:</strong><br>
                         ------------------------------------<br>
                         Certificate ID: ${data.certificateId}<br>
-                        Status: ${validityStatus}<br> Product ID: ${data.productId || '(Data in DB)'}<br> Manufacturer ID: ${data.manufacturerId || '(Data in DB)'}<br>
-                        Issue Date: ${data.issueDate || '(Data in DB)'}<br>
-                        Expiry Date: ${data.expiryDate || '(Data in DB)'}<br>
-                        Certifying Body: ${data.certifyingBodyId || '(Data in DB)'}<br>
+                        Status: ${validityStatus}<br>
+                        Product ID: ${data.productId || '(N/A)'}<br>
+                        Manufacturer ID: ${data.manufacturerId || '(N/A)'}<br>
+                        Issue Date: ${data.issueDate || '(N/A)'}<br>
+                        Expiry Date: ${data.expiryDate || '(N/A)'}<br>
+                        Certifying Body: ${data.certifyingBodyId || '(N/A)'}<br>
                         Off-Chain Hash: ${data.offchainDataHash}<br>
-                        DB Record ID: ${data._id || '(N/A)'}<br> Last Updated (DB): ${data.lastUpdated || '(N/A)'}<br>
+                        DB Record ID: ${data._id || '(N/A)'}<br>
+                        Last Updated (DB): ${data.lastUpdated || '(N/A)'}<br>
                         ------------------------------------
                     `;
                     resultDiv.style.color = 'black';
                 } else {
-                    // Display error message from backend (e.g., "Certificate not found")
                     resultDiv.textContent = `Info: ${result.message}`;
-                    resultDiv.style.color = 'blue'; // Use blue for info messages like "not found"
+                    resultDiv.style.color = 'blue';
                 }
             } catch (error) {
-                // Handle network errors or other frontend issues
                 console.error('Frontend Error (Get Certificate):', error);
                 resultDiv.textContent = `Frontend Error: ${error.message}. Check console & ensure backend server is running.`;
                 resultDiv.style.color = 'red';
             }
         }
 
-        // --- START: New Invalidate Certificate Handling ---
+        // --- Invalidate Certificate ---
         const invalidateCertIdInput = document.getElementById('invalidateCertId');
         const invalidateResultDiv = document.getElementById('invalidateResult');
 
@@ -180,34 +290,29 @@
             invalidateResultDiv.style.color = 'orange';
 
             try {
-                // Send request to our backend server's /invalidateCertificate/:certificateId endpoint
-                // Note: Uses POST method, Certificate ID is part of the URL path
                 const response = await fetch(`/invalidateCertificate/${certId}`, {
-                    method: 'POST', // Use POST, PUT, or DELETE as appropriate for action type
+                    method: 'POST',
                     headers: { 'Content-Type': 'application/json' }
-                    // No body needed as ID is in URL
                 });
 
-                const result = await response.json(); // Parse JSON response from server
+                const result = await response.json();
 
                 if (result.success) {
                     invalidateResultDiv.textContent = `Success! ${result.message} TxHash: ${result.txHash}`;
                     invalidateResultDiv.style.color = 'green';
-                    invalidateCertIdInput.value = ''; // Clear input
+                    invalidateCertIdInput.value = '';
                 } else {
-                    // Display error message from backend (e.g., "Not found", "Already invalid")
                     invalidateResultDiv.textContent = `Error: ${result.message}`;
                     invalidateResultDiv.style.color = 'red';
                 }
             } catch (error) {
-                // Handle network errors or other frontend issues
                 console.error('Frontend Error (Invalidate Certificate):', error);
                 invalidateResultDiv.textContent = `Frontend Error: ${error.message}. Check console & ensure backend server is running.`;
                 invalidateResultDiv.style.color = 'red';
             }
         }
-        // --- END: New Invalidate Certificate Handling ---
 
     </script>
 </body>
+
 </html>

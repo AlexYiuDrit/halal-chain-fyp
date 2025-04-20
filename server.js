@@ -8,6 +8,10 @@ require('dotenv').config();
 const app = express();
 const port = 3000;
 
+// Variable to simulate user role for Role-Based Access Control (RBAC) testing
+// 0 for Certifier (accounts[0]), 1 for Non-Certifier (accounts[1])
+let simulatedUserAccountIndex = 0;
+
 // --- Configuration ---
 const ganacheUrl = process.env.GANACHE_URL;
 const web3 = new Web3(ganacheUrl);
@@ -18,32 +22,24 @@ const collectionName = 'certificates';
 
 const mongoClient = new MongoClient(mongoUri, {
     serverApi: {
-      version: ServerApiVersion.v1,
-      strict: true,
-      deprecationErrors: true,
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
     }
-  });
+});
 
 let db, certificatesCollection;
 async function connectDb() {
     try {
-        // Connect the client to the server
         await mongoClient.connect();
         db = mongoClient.db(dbName);
         certificatesCollection = db.collection(collectionName);
         console.log(`Successfully connected to MongoDB Atlas! Database: ${dbName}, Collection: ${collectionName}`);
-
-        // Optional: You could add a ping here if you want confirmation on startup
-        // await db.command({ ping: 1 });
-        // console.log("Ping successful.");
-
     } catch (err) {
         console.error('!!! Failed to connect to MongoDB Atlas:', err);
-        // Try to close client gracefully on connection error during startup
         await mongoClient.close();
-        process.exit(1); // Exit if DB connection fails
+        process.exit(1);
     }
-    // DO NOT close the client here in a long-running server
 }
 
 // --- Web3 Contract Instance Setup ---
@@ -51,18 +47,18 @@ let halalContract;
 let contractAddress;
 
 try {
+    // Load contract ABI and address from build artifacts
     const contractJson = require('./build/contracts/HalalCertificate.json');
     const contractABI = contractJson.abi;
 
-    // Dynamically find the address from the most recent deployment in the artifact
-    // This assumes Ganache network ID ('*') or a known ID like 5777 is in the networks object
-    const networkId = Object.keys(contractJson.networks)[Object.keys(contractJson.networks).length - 1]; // Get the last deployed network ID key
+    // Dynamically find the address from the most recent deployment
+    const networkId = Object.keys(contractJson.networks)[Object.keys(contractJson.networks).length - 1];
     const deployedNetwork = contractJson.networks[networkId];
 
     if (!deployedNetwork || !deployedNetwork.address) {
         throw new Error("Contract address not found in build artifact. Ensure contract is deployed.");
     }
-    contractAddress = deployedNetwork.address; // Assign the dynamically found address
+    contractAddress = deployedNetwork.address;
 
     console.log(`Dynamically loaded contract address: ${contractAddress}`);
     halalContract = new web3.eth.Contract(contractABI, contractAddress);
@@ -77,277 +73,290 @@ try {
 app.use(express.json());
 app.use(express.static(__dirname));
 
-// --- Helper Function for Hashing ---
+// Calculates SHA-256 hash of provided data object after sorting keys for consistency.
 function calculateHash(data) {
-    // Create a consistent string representation (e.g., sorted JSON) for hashing
     const orderedData = JSON.stringify(Object.keys(data).sort().reduce(
-      (obj, key) => {
-        obj[key] = data[key];
-        return obj;
-      },
-      {}
+        (obj, key) => {
+            obj[key] = data[key];
+            return obj;
+        },
+        {}
     ));
     return '0x' + crypto.createHash('sha256').update(orderedData).digest('hex');
 }
 
 // --- API Endpoints ---
-
-// Serve the main HTML page
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// MODIFIED Endpoint: Add/Update Certificate (Hybrid)
+// Handles adding a new certificate or updating an existing one.
+// It calculates the hash of off-chain data, sends a transaction to the smart contract
+// with the hash and validity status, and stores the full data in MongoDB.
 app.post('/addCertificate', async (req, res) => {
     if (!certificatesCollection) {
-         return res.status(503).send({ success: false, message: 'Database not connected yet.' });
+        return res.status(503).send({ success: false, message: 'Database not connected yet.' });
     }
     try {
-        const { certificateId, productId, manufacturerId, issueDate, expiryDate, certifyingBodyId } = req.body;
+        const {
+            certificateId, productId, manufacturerId, issueDate, expiryDate, certifyingBodyId,
+        } = req.body;
 
         if (!certificateId || !productId || !manufacturerId || !issueDate || !expiryDate || !certifyingBodyId) {
             return res.status(400).send({ success: false, message: 'Missing required certificate data fields' });
         }
 
-        // 1. Prepare Off-Chain Data
         const offChainData = {
-            // certificateId is the key, store other details
             productId: productId,
             manufacturerId: manufacturerId,
             issueDate: issueDate,
             expiryDate: expiryDate,
             certifyingBodyId: certifyingBodyId,
-            // Add any other large/sensitive fields here if needed
-            lastUpdated: new Date().toISOString() // Add a timestamp
+            lastUpdated: new Date().toISOString()
         };
 
-        console.log("Off-chain data prepared:", offChainData);
-        
-        // 2. Save/Update Off-Chain Data in MongoDB
-        // Use upsert: update if exists (based on _id = certificateId), insert if not.
-        const mongoResult = await certificatesCollection.updateOne(
-            { _id: certificateId }, // Filter by certificateId (using it as MongoDB _id)
-            { $set: offChainData }, // Data to set/update
-            { upsert: true } // Option to insert if not found
-        );
-        console.log(`MongoDB update result for ID ${certificateId}:`, mongoResult);
-
-        // 3. Calculate Hash of Off-Chain Data
         const offChainDataHash = calculateHash(offChainData);
         console.log(`Calculated SHA-256 Hash for off-chain data: ${offChainDataHash}`);
 
-        // 4. Prepare On-Chain Data (only hash and status)
-        const onChainIsValid = true; // Assume valid when adding/updating
-
-        // 5. Send Transaction to Smart Contract
+        const onChainIsValid = true;
         const accounts = await web3.eth.getAccounts();
-        if (accounts.length === 0) {
-             return res.status(500).send({ success: false, message: 'No accounts found in Ganache.' });
+        if (accounts.length < 2) {
+            return res.status(500).send({ success: false, message: 'Need at least 2 accounts in Ganache for RBAC demo.' });
         }
-        const ownerAccount = accounts[0]; // Use the owner account (deployer)
+        const transactionAccount = accounts[simulatedUserAccountIndex];
+        console.log(`Simulating action as ${simulatedUserAccountIndex === 0 ? 'CERTIFIER (Account 0)' : 'NON-CERTIFIER (Account 1)'}: ${transactionAccount}`);
 
-        console.log(`Attempting smart contract update for ${certificateId} using account ${ownerAccount}`);
-
+        console.log(`Attempting smart contract update for ${certificateId} using account ${transactionAccount}`);
         const gasEstimateBigInt = await halalContract.methods.addOrUpdateCertificate(
             certificateId, offChainDataHash, onChainIsValid
-        ).estimateGas({ from: ownerAccount });
-
+        ).estimateGas({ from: transactionAccount });
         const gasEstimateNumber = Number(gasEstimateBigInt);
         const bufferedGasLimit = Math.floor(gasEstimateNumber * 1.2);
 
         const receipt = await halalContract.methods.addOrUpdateCertificate(
             certificateId, offChainDataHash, onChainIsValid
-        ).send({ from: ownerAccount, gas: bufferedGasLimit });
-
+        ).send({ from: transactionAccount, gas: bufferedGasLimit });
         console.log('Blockchain transaction successful! Receipt:', receipt.transactionHash);
+
+        const mongoResult = await certificatesCollection.updateOne(
+            { _id: certificateId },
+            { $set: { ...offChainData, isValid: true } },
+            { upsert: true }
+        );
+        console.log(`MongoDB update result for ID ${certificateId}:`, mongoResult);
+
         res.status(200).send({ success: true, txHash: receipt.transactionHash });
 
     } catch (error) {
         console.error("!!! Error in /addCertificate endpoint:", error);
-        res.status(500).send({ success: false, message: error.message });
+
+        let errorMessage = "An unexpected error occurred while adding/updating certificate.";
+        let statusCode = 500;
+        let revertReason = null;
+
+        if (error.reason) {
+            revertReason = error.reason;
+        } else if (error.cause && typeof error.cause.message === 'string') {
+            const causeMessage = error.cause.message;
+            const match = causeMessage.match(/revert\s*(.*)/);
+            revertReason = (match && match[1]) ? match[1].trim() : causeMessage;
+        } else if (typeof error.message === 'string') {
+            const message = error.message;
+            const match = message.match(/revert\s*(.*)/);
+            if (match && match[1]) {
+                revertReason = match[1].trim().split('\n')[0];
+            }
+        }
+
+        if (revertReason) {
+            console.log("Detected Revert Reason:", revertReason);
+            if (revertReason.includes("AccessControl: account") && revertReason.includes("is missing role")) {
+                 errorMessage = "Permission Denied: Action requires CERTIFIER role.";
+                 statusCode = 403;
+            } else {
+                errorMessage = `Smart contract execution reverted: ${revertReason}`;
+                statusCode = 400;
+            }
+        } else if (error && error.code === 310) {
+             errorMessage = "Smart contract execution failed without a specific reason.";
+             statusCode = 500;
+        }
+
+        res.status(statusCode).send({ success: false, message: errorMessage });
     }
 });
 
-// MODIFIED Endpoint: Get Certificate Details (Hybrid)
+// Retrieves certificate details by ID.
+// It fetches the hash and status from the smart contract, retrieves the full data
+// from MongoDB, verifies the hash, and returns the combined data.
 app.get('/getCertificate/:certificateId', async (req, res) => {
-     if (!certificatesCollection) {
-         return res.status(503).send({ success: false, message: 'Database not connected yet.' });
+    if (!certificatesCollection) {
+        return res.status(503).send({ success: false, message: 'Database not connected yet.' });
     }
     try {
         const { certificateId } = req.params;
-        console.log(`Workspaceing details for certificate ID: ${certificateId}`);
 
-        // 1. Query Smart Contract for On-Chain Data (Hash and Status)
-        console.log(`Querying smart contract for ID: ${certificateId}...`);
         const onChainData = await halalContract.methods.certificates(certificateId).call();
-        console.log("On-chain data received:", onChainData);
 
-        // Basic check if certificate exists on-chain
         if (!onChainData || onChainData.offchainDataHash === '0x0000000000000000000000000000000000000000000000000000000000000000') {
-             return res.status(404).send({ success: false, message: 'Certificate not found on blockchain.' });
-        }
-         if (!onChainData.isValid) {
-             return res.status(200).send({ success: true, message: 'Certificate found but is marked invalid.', data: { certificateId: certificateId, isValid: false } });
+            return res.status(404).send({ success: false, message: 'Certificate not found on blockchain.' });
         }
 
+        if (!onChainData.isValid) {
+            return res.status(200).send({ success: true, message: 'Certificate found but is marked invalid.', data: { certificateId: certificateId, isValid: false } });
+        }
 
-        // 2. Query MongoDB for Off-Chain Data using certificateId
-        console.log(`Querying MongoDB for ID: ${certificateId}...`);
         const offChainData = await certificatesCollection.findOne({ _id: certificateId });
-         console.log("Off-chain data received:", offChainData);
 
         if (!offChainData) {
-            // Data inconsistency! Hash exists on-chain, but data missing off-chain.
             console.error(`Inconsistency: Data for ID ${certificateId} not found in MongoDB, but hash exists on-chain.`);
-             return res.status(500).send({ success: false, message: 'Data inconsistency error: Off-chain data not found.' });
+            return res.status(500).send({ success: false, message: 'Data inconsistency error: Off-chain data not found.' });
         }
 
         const dataToHash = { ...offChainData };
         delete dataToHash._id;
-        console.log("Data to hash:", dataToHash);
+        delete dataToHash.isValid;
 
-        // 3. (Optional but Recommended) Verify Hash Integrity
         const calculatedHash = calculateHash(dataToHash);
         if (calculatedHash !== onChainData.offchainDataHash) {
-             console.error(`Data integrity check failed for ID ${certificateId}! On-chain hash: ${onChainData.offchainDataHash}, Calculated hash: ${calculatedHash}`);
-             return res.status(500).send({ success: false, message: 'Data integrity check failed! Off-chain data may have been tampered with.' });
+            console.error(`Data integrity check failed for ID ${certificateId}! On-chain hash: ${onChainData.offchainDataHash}, Calculated hash: ${calculatedHash}`);
+            return res.status(500).send({ success: false, message: 'Data integrity check failed! Off-chain data may have been tampered with.' });
         }
-         console.log(`Data integrity check passed for ID ${certificateId}.`);
+        console.log(`Data integrity check passed for ID ${certificateId}.`);
 
-
-        // 4. Combine On-Chain and Off-Chain Data
         const combinedData = {
-            certificateId: certificateId, // Use the requested ID
+            certificateId: certificateId,
             isValid: onChainData.isValid,
-            offchainDataHash: onChainData.offchainDataHash, // Include hash for info
-            ...offChainData // Spread the fields from the MongoDB document
+            offchainDataHash: onChainData.offchainDataHash,
+            ...offChainData
         };
-
         res.status(200).send({ success: true, data: combinedData });
 
     } catch (error) {
         console.error("!!! Error in /getCertificate endpoint:", error);
-        res.status(500).send({ success: false, message: error.message });
+        res.status(500).send({ success: false, message: "An unexpected error occurred while retrieving the certificate." });
     }
 });
 
-// --- START: New Invalidate Endpoint ---
+// Marks a certificate as invalid on the blockchain and updates the status in MongoDB.
 app.post('/invalidateCertificate/:certificateId', async (req, res) => {
-    // Check if DB and contract connections are ready
     if (!certificatesCollection || !halalContract) {
-         return res.status(503).send({ success: false, message: 'Server components not ready.' });
+        return res.status(503).send({ success: false, message: 'Server components not ready.' });
     }
     try {
-        const { certificateId } = req.params; // Get ID from URL path
+        const { certificateId } = req.params;
         console.log(`Attempting to invalidate certificate ID: ${certificateId}`);
 
-        // Validate certificateId
         if (!certificateId) {
             return res.status(400).send({ success: false, message: 'Certificate ID is required.' });
         }
 
-        // Get owner account from Ganache to send the transaction
         const accounts = await web3.eth.getAccounts();
-        if (accounts.length === 0) {
-             return res.status(500).send({ success: false, message: 'No accounts found in Ganache.' });
+        if (accounts.length < 2) {
+            return res.status(500).send({ success: false, message: 'Need at least 2 accounts in Ganache for RBAC demo.' });
         }
-        // Use the owner account (the one that deployed the contract)
-        // Ensure this account is available and unlocked in Ganache
-        const ownerAccount = accounts[0];
-        console.log(`Using owner account ${ownerAccount} to send invalidate transaction.`);
+        const transactionAccount = accounts[simulatedUserAccountIndex];
+        console.log(`Simulating action as ${simulatedUserAccountIndex === 0 ? 'CERTIFIER (Account 0)' : 'NON-CERTIFIER (Account 1)'}: ${transactionAccount}`);
 
-        // Estimate gas for the invalidate transaction
         const gasEstimateBigInt = await halalContract.methods.invalidateCertificate(
             certificateId
-        ).estimateGas({ from: ownerAccount });
-
+        ).estimateGas({ from: transactionAccount });
         const gasEstimateNumber = Number(gasEstimateBigInt);
-        const bufferedGasLimit = Math.floor(gasEstimateNumber * 1.2); // Add 20% buffer
-        console.log(`Estimated gas for invalidation: ${bufferedGasLimit}`);
+        const bufferedGasLimit = Math.floor(gasEstimateNumber * 1.2);
 
-        // Send the transaction to the smart contract's invalidate function
         const receipt = await halalContract.methods.invalidateCertificate(
             certificateId
-        ).send({ from: ownerAccount, gas: bufferedGasLimit });
-
+        ).send({ from: transactionAccount, gas: bufferedGasLimit });
         console.log('Invalidation transaction successful! Receipt:', receipt.transactionHash);
-        // Optionally: Update status in MongoDB as well for consistency, though the primary source is now blockchain
-        await certificatesCollection.updateOne({ _id: certificateId }, { $set: { manuallyMarkedInvalid: true, lastUpdated: new Date().toISOString() } });
+
+        await certificatesCollection.updateOne(
+            { _id: certificateId },
+            { $set: { isValid: false, lastUpdated: new Date().toISOString() } }
+        );
+        console.log(`MongoDB record for ${certificateId} marked as invalid.`);
 
         res.status(200).send({ success: true, message: `Certificate ${certificateId} marked as invalid.`, txHash: receipt.transactionHash });
 
     } catch (error) {
-        // Log the full error structure for easier debugging in the future
-        console.error("!!! Error object structure in /invalidateCertificate endpoint:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-    
-        let friendlyMessage = "An unexpected error occurred during invalidation."; // Default
-        let statusCode = 500; // Default
-    
-        // --- START: More Robust Revert Reason Parsing ---
+        console.error("!!! Error in /invalidateCertificate endpoint:", error);
+
+        let errorMessage = "An unexpected error occurred during invalidation.";
+        let statusCode = 500;
         let revertReason = null;
-    
-        // Try common locations for the revert reason string:
-        if (error.reason) { // Standard EIP-838 reason field (might not be populated by older tools/chains)
-             revertReason = error.reason;
-        } else if (error.cause && typeof error.cause.message === 'string') { // Nested cause message (matches user log structure)
-             const causeMessage = error.cause.message;
-             // Extract reason string after "revert " prefix
-             const match = causeMessage.match(/revert\s*(.*)/);
-             if (match && match[1]) {
-                  revertReason = match[1].trim();
-             } else {
-                  revertReason = causeMessage; // Fallback to using the whole cause message if "revert " not found
-             }
-        } else if (typeof error.message === 'string') { // Fallback to checking the main message string
-             const message = error.message;
-             const match = message.match(/revert\s*(.*)/);
-             if (match && match[1]) {
-                  // Get the first line after "revert " as it might contain stack traces
-                  revertReason = match[1].trim().split('\n')[0];
-             }
-        }
-        // Add checks for other potential properties if needed (e.g., error.data?.message)
-    
-        console.log("Detected Revert Reason:", revertReason); // Log the detected reason
-    
-        // Set friendly message and status code based on detected reason
-        if (revertReason) {
-            if (revertReason.includes("Certificate does not exist.")) {
-                friendlyMessage = "Certificate ID not found on the blockchain.";
-                statusCode = 404; // Not Found
-            } else if (revertReason.includes("Certificate is already invalid.")) {
-                friendlyMessage = "Certificate is already marked as invalid.";
-                statusCode = 400; // Bad Request
-            } else if (revertReason.includes("caller is not the owner")) { // From Ownable
-                friendlyMessage = "Action requires contract owner privileges.";
-                statusCode = 403; // Forbidden
-            } else {
-                // Found a revert reason, but didn't match known ones
-                friendlyMessage = `Smart contract execution reverted: ${revertReason}`;
-                statusCode = 400; // Use 400 for general contract rule violations
+
+        if (error.reason) {
+            revertReason = error.reason;
+        } else if (error.cause && typeof error.cause.message === 'string') {
+            const causeMessage = error.cause.message;
+            const match = causeMessage.match(/revert\s*(.*)/);
+            revertReason = (match && match[1]) ? match[1].trim() : causeMessage;
+        } else if (typeof error.message === 'string') {
+            const message = error.message;
+            const match = message.match(/revert\s*(.*)/);
+            if (match && match[1]) {
+                revertReason = match[1].trim().split('\n')[0];
             }
-        } else if (error && error.code === 310) { // Generic contract error if no specific reason found
-            friendlyMessage = "Smart contract execution failed without a specific reason.";
-            statusCode = 500;
         }
-        // --- END: More Robust Revert Reason Parsing ---
-    
-        res.status(statusCode).send({ success: false, message: friendlyMessage });
+
+        if (revertReason) {
+             console.log("Detected Revert Reason:", revertReason);
+             if (revertReason.includes("Certificate does not exist.")) {
+                 errorMessage = "Certificate ID not found on the blockchain.";
+                 statusCode = 404;
+             } else if (revertReason.includes("Certificate is already invalid.")) {
+                 errorMessage = "Certificate is already marked as invalid.";
+                 statusCode = 400;
+             } else if (revertReason.includes("AccessControl: account") && revertReason.includes("is missing role")) {
+                 errorMessage = "Permission Denied: Action requires CERTIFIER role.";
+                 statusCode = 403;
+             } else {
+                 errorMessage = `Smart contract execution reverted: ${revertReason}`;
+                 statusCode = 400;
+             }
+         } else if (error && error.code === 310) {
+              errorMessage = "Smart contract execution failed without a specific reason.";
+              statusCode = 500;
+         }
+
+        res.status(statusCode).send({ success: false, message: errorMessage });
     }
 });
 
+// Switches the simulated user role between Certifier (Account 0) and Non-Certifier (Account 1).
+app.post('/simulateRole', (req, res) => {
+    const { role } = req.body;
+    if (role === 'CERTIFIER') {
+        simulatedUserAccountIndex = 0;
+        console.log("Switched simulated role to CERTIFIER (Account 0)");
+        res.status(200).send({ success: true, message: 'Simulating as Certifier (Account 0)' });
+    } else if (role === 'NON_CERTIFIER') {
+        simulatedUserAccountIndex = 1;
+        console.log("Switched simulated role to NON_CERTIFIER (Account 1)");
+        res.status(200).send({ success: true, message: 'Simulating as Non-Certifier (Account 1)' });
+    } else {
+        res.status(400).send({ success: false, message: 'Invalid role specified' });
+    }
+});
+
+// Returns the currently simulated role.
+app.get('/getCurrentRole', (req, res) => {
+    const currentRole = simulatedUserAccountIndex === 0 ? 'CERTIFIER (Account 0)' : 'NON_CERTIFIER (Account 1)';
+    res.status(200).send({ success: true, role: currentRole });
+});
+
 // --- Start Server ---
+// Initializes DB connection and starts the Express server.
 async function startServer() {
-    await connectDb(); // Connect to MongoDB first
+    await connectDb();
     app.listen(port, () => {
         console.log(`======== Halal Chain Server Started (Hybrid Mode) ========`);
         console.log(`>> Listening at http://localhost:${port}`);
         console.log(`>> Connected to Ganache at ${ganacheUrl}`);
         console.log(`>> Using Contract Address: ${contractAddress}`);
         console.log(`>> Contract ABI loaded from: ./build/contracts/HalalCertificate.json`);
-        console.log(`>> Connected to MongoDB: <span class="math-inline">\{dbName\}/</span>{collectionName}`);
+        console.log(`>> Connected to MongoDB: ${dbName}/${collectionName}`);
         console.log(`=========================================================`);
     });
 }
 
-startServer(); // Call async function to start
+startServer();

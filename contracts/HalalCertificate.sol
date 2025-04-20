@@ -1,89 +1,91 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19; // Use 0.8.19 for Ganache compatibility
+pragma solidity ^0.8.19;
 
-// Import OpenZeppelin's Ownable contract for access control
-import "@openzeppelin/contracts/access/Ownable.sol"; // Need to install this!
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
-contract HalalCertificate is Ownable { // Inherit from Ownable
+contract HalalCertificate is AccessControl {
 
+    // --- Role ---
+    // Define bytes32 constants for role identifiers
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant CERTIFIER_ROLE = keccak256("CERTIFIER_ROLE");
+
+    // --- Struct ---
     struct Certificate {
-        string certificateId;     // Keep as primary identifier
-        bytes32 offchainDataHash; // Hash of the data stored off-chain (e.g., in MongoDB)
-        bool isValid;             // Status flag remains on-chain
-        // We don't store owner here, owner is contract-wide via Ownable
+        string certificateId;
+        bytes32 offchainDataHash;
+        bool isValid;
     }
 
+    // --- State Variables ---
     // Mapping: certificateId => Certificate data
     mapping(string => Certificate) public certificates;
 
-    // --- Event ---
-    // Emitted when a certificate is added or updated
+    // --- Events ---
     event CertificateUpdated(
         string indexed certificateId,
         bytes32 offchainDataHash,
         bool isValid,
-        address indexed updatedBy // Address that triggered the update
+        address indexed updatedBy
     );
 
     event CertificateInvalidated(
         string indexed certificateId,
-        address indexed invalidatedBy // Address that triggered the invalidation
+        address indexed invalidatedBy
     );
 
-    // Constructor to set the initial owner (the deploying account)
-    // Use constructor(address initialOwner) for Ownable v5+, or just constructor() for v4
-    // Check your OpenZeppelin version. Assuming v4 for simplicity here.
     constructor() {
-        // Owner is set automatically by Ownable constructor in v4
-        // No need to pass msg.sender here
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(ADMIN_ROLE, msg.sender);
+        _grantRole(CERTIFIER_ROLE, msg.sender);
+        _setRoleAdmin(CERTIFIER_ROLE, ADMIN_ROLE);
     }
 
 
-    // MODIFIED Function: Now takes hash, includes validation, access control, and event
+    // --- Certificate Management ---
+    // Add/Update Certificate - restricted to CERTIFIER_ROLE
     function addOrUpdateCertificate(
         string memory _certificateId,
         bytes32 _offchainDataHash,
         bool _isValid
-    ) public onlyOwner { // Apply the onlyOwner modifier
-
-        // --- Input Validation ---
+    ) public onlyRole(CERTIFIER_ROLE) {
         require(bytes(_certificateId).length > 0, "Certificate ID cannot be empty");
         require(_offchainDataHash != bytes32(0), "Off-chain data hash cannot be zero");
 
-        // Store the minimal on-chain data
         certificates[_certificateId] = Certificate(
             _certificateId,
             _offchainDataHash,
             _isValid
         );
 
-        // --- Emit Event ---
         emit CertificateUpdated(
             _certificateId,
             _offchainDataHash,
             _isValid,
-            msg.sender // Log the address that performed the action
+            msg.sender
         );
     }
 
-    // Function to mark a certificate as invalid
-    function invalidateCertificate(string memory _certificateId) public onlyOwner {
-        // Input Validation: Check if certificate exists (using hash as proxy)
+    // Invalidate Certificate - restricted to CERTIFIER_ROLE
+    function invalidateCertificate(string memory _certificateId) public onlyRole(CERTIFIER_ROLE) {
         require(certificates[_certificateId].offchainDataHash != bytes32(0), "Certificate does not exist.");
-
-        // Input Validation: Check if it's already invalid
         require(certificates[_certificateId].isValid == true, "Certificate is already invalid.");
 
-        // Update the state: Set isValid to false
         certificates[_certificateId].isValid = false;
 
-        // Emit the event
         emit CertificateInvalidated(_certificateId, msg.sender);
     }
 
-    // We still rely on the public getter for 'certificates' to retrieve data.
-    // Consider adding a dedicated getter function if more complex retrieval logic needed later.
+    // --- Role Management ---
 
-    // Optional: Function to allow owner transfer (comes with Ownable)
-    // function transferOwnership(address newOwner) public virtual override onlyOwner { ... }
+    function grantCertifierRole(address account) public onlyRole(ADMIN_ROLE) {
+        grantRole(CERTIFIER_ROLE, account);
+    }
+
+    function revokeCertifierRole(address account) public onlyRole(ADMIN_ROLE) {
+        revokeRole(CERTIFIER_ROLE, account);
+    }
+
+    function renounceCertifierRole() public {
+        renounceRole(CERTIFIER_ROLE, msg.sender);
+    }
 }
